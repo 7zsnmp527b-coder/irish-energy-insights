@@ -1068,6 +1068,417 @@ def render_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedUpload] | N
         st.dataframe(make_unique_columns(recommendations), hide_index=True, width="stretch")
 
 
+def render_analytics_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedUpload] | None = None) -> None:
+    """Render the upload-based app as a richer, multi-tab homeowner dashboard."""
+    daily = make_unique_columns(dataset["daily"].copy())
+    interval = make_unique_columns(dataset["interval"].copy())
+    monthly = make_unique_columns(add_monthly_costs(dataset["monthly"].copy(), tariff))
+    quality = make_unique_columns(dataset["quality"].copy())
+    missing = make_unique_columns(dataset["missing"].copy())
+    export_kwh = float(dataset.get("export_kwh", 0.0) or 0.0)
+    messages = [str(m) for m in dataset.get("messages", []) if str(m).strip()]
+
+    min_day = daily["usage_date"].min().date()
+    max_day = daily["usage_date"].max().date()
+    period_days = max((max_day - min_day).days + 1, 1)
+    total_kwh = float(daily["usage_kwh"].sum())
+    avg_daily = float(daily["usage_kwh"].mean())
+    median_daily = float(daily["usage_kwh"].median())
+    peak_day = daily.loc[daily["usage_kwh"].idxmax()]
+    non_zero_days = daily[daily["usage_kwh"] > 0]
+    quiet_day = non_zero_days.loc[non_zero_days["usage_kwh"].idxmin()] if not non_zero_days.empty else daily.loc[daily["usage_kwh"].idxmin()]
+    total_cost = cost_for_period(total_kwh, period_days, tariff, export_kwh)
+
+    problem_count = int((quality["status"] == "Problem").sum()) if "status" in quality.columns else 0
+    check_count = int((quality["status"] == "Check").sum()) if "status" in quality.columns else 0
+    missing_penalty = min(20, int(len(missing) / max(period_days, 1))) if not missing.empty else 0
+    confidence_score = max(0, min(100, 96 - problem_count * 28 - check_count * 8 - missing_penalty))
+    confidence_label = "High" if confidence_score >= 85 else "Medium" if confidence_score >= 65 else "Needs checking"
+
+    interval_available = not interval.empty and "interval_kwh" in interval.columns
+    dnp_cols = [c for c in ["night_kwh", "day_off_peak_kwh", "peak_kwh"] if c in daily.columns]
+    export_available = "export_kwh" in daily.columns and float(daily["export_kwh"].fillna(0).sum()) > 0
+    estimated_reads = 0
+    for item in parsed or []:
+        if "read_type" in item.frame.columns:
+            estimated_reads += int(item.frame["read_type"].astype(str).str.contains("estimate|estimated", case=False, na=False).sum())
+
+    hourly = pd.DataFrame()
+    peak_hours = pd.DataFrame()
+    baseload_kw = np.nan
+    overnight_kwh = np.nan
+    if interval_available:
+        hourly = interval.dropna(subset=["interval_kwh"]).groupby("hour", as_index=False).agg(avg_kwh=("interval_kwh", "mean"))
+        hourly = make_unique_columns(hourly)
+        if not hourly.empty:
+            hourly["avg_kw"] = hourly["avg_kwh"] * 2
+            peak_hours = hourly.nlargest(4, "avg_kw")
+            overnight_kwh = float(interval.loc[interval["hour"].isin([23, 0, 1, 2, 3, 4, 5, 6]), "interval_kwh"].sum())
+            baseload_values = hourly.loc[hourly["hour"].between(2, 5), "avg_kw"]
+            baseload_kw = float(baseload_values.median()) if not baseload_values.empty else np.nan
+
+    st.markdown("## Your electricity dashboard")
+    if dataset.get("source") == "demo":
+        st.info("Demo mode is using synthetic sample data. Upload your own ESB HDF files for real results.")
+    for message in messages:
+        st.warning(message)
+
+    kpi_cols = st.columns(5)
+    with kpi_cols[0]:
+        metric_card("Total usage", kwh(total_kwh), f"{min_day:%d %b} to {max_day:%d %b}")
+    with kpi_cols[1]:
+        metric_card("Estimated cost", euro(total_cost["total"]), "Usage + fixed charges")
+    with kpi_cols[2]:
+        metric_card("Average day", kwh(avg_daily), f"Median {kwh(median_daily)}")
+    with kpi_cols[3]:
+        metric_card("Annualised cost", euro(total_cost["annualised_cost"]), "At tariff inputs")
+    with kpi_cols[4]:
+        metric_card("Confidence", f"{confidence_score}/100", confidence_label)
+
+    tabs = st.tabs(["Overview", "Usage Patterns", "Time-of-Day Analysis", "Tariff & Cost Analysis", "Data Quality"])
+
+    with tabs[0]:
+        st.markdown("### Bottom line")
+        if tariff.get("supplier_app_kwh") is not None:
+            app_kwh = float(tariff["supplier_app_kwh"])
+            ratio = total_kwh / max(app_kwh, 0.01)
+            if ratio > 1.2 or ratio < 0.8:
+                st.error(f"Supplier app discrepancy detected: ESB-derived usage is {kwh(total_kwh)} versus {kwh(app_kwh)} in the app, about {ratio:.1f}x different.")
+            else:
+                st.success("The supplier app figure entered is broadly consistent with the uploaded ESB data.")
+        else:
+            st.info("Add a supplier app kWh figure in the sidebar if you want an app-accuracy check.")
+
+        overview_metrics = st.columns(4)
+        with overview_metrics[0]:
+            metric_card("Highest day", kwh(peak_day["usage_kwh"]), pd.Timestamp(peak_day["usage_date"]).strftime("%d %b %Y"))
+        with overview_metrics[1]:
+            metric_card("Quietest day", kwh(quiet_day["usage_kwh"]), pd.Timestamp(quiet_day["usage_date"]).strftime("%d %b %Y"))
+        with overview_metrics[2]:
+            metric_card("Annualised usage", kwh(total_cost["annualised_kwh"]), "Based on uploaded period")
+        with overview_metrics[3]:
+            metric_card("Data quality", confidence_label, f"{confidence_score}/100")
+
+        left, right = st.columns([1.2, 1])
+        with left:
+            st.markdown("#### Monthly totals")
+            chart_monthly = safe_plot_df(monthly)
+            fig = px.bar(chart_monthly, x="month", y="total_kwh", text=chart_monthly["total_kwh"].round(1), labels={"month": "Month", "total_kwh": "kWh"})
+            fig.update_xaxes(ticktext=[month_label(m) for m in chart_monthly["month"]], tickvals=chart_monthly["month"])
+            fig.update_traces(textposition="outside")
+            fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+        with right:
+            st.markdown("#### Estimated monthly cost")
+            fig = px.bar(chart_monthly, x="month", y="total_estimated_cost_eur", text=chart_monthly["total_estimated_cost_eur"].round(0), labels={"month": "Month", "total_estimated_cost_eur": "€"})
+            fig.update_xaxes(ticktext=[month_label(m) for m in chart_monthly["month"]], tickvals=chart_monthly["month"])
+            fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("### Key insights")
+        insight_cols = st.columns(3)
+        with insight_cols[0]:
+            peak_text = "Upload interval data to reveal the busiest hours."
+            if not peak_hours.empty:
+                peak_text = "Your strongest average hours are " + ", ".join(f"{int(h)}:00" for h in peak_hours["hour"].head(3)) + "."
+            insight_card("When usage rises", peak_text, "Peak windows are where household behaviour most visibly affects the bill.", "Cooking, hot water, laundry, showering, heating controls, or several appliances together.", "Compare high-use days with what was happening during those hours.")
+        with insight_cols[1]:
+            baseload_text = "Interval data is needed for a baseload estimate."
+            if not np.isnan(baseload_kw):
+                baseload_text = f"Your rough overnight baseload is about {baseload_kw:.2f} kW."
+            insight_card("Always-on electricity", baseload_text, "Small continuous loads become meaningful because they run every day.", "Fridge/freezer, router, standby devices, pumps, chargers, dehumidifier, or timed water heating.", "Check timers and anything left running, warm, humming, charging, or cycling overnight.")
+        with insight_cols[2]:
+            insight_card("Cost drivers", f"The uploaded period costs about {euro(total_cost['total'])} at the tariff entered.", "Final bills include both energy use and fixed daily charges.", "High kWh days drive the usage charge; standing charge and PSO continue on quiet days.", "Separate usage changes from fixed charges when checking bills.")
+
+        st.markdown("### Recommendations")
+        recommendations = pd.DataFrame(
+            [
+                ["1", "Compare the next supplier bill with this dashboard", "Bills can include standing charges, PSO, VAT, credits and adjustments."],
+                ["2", "If the supplier app disagrees, ask for a smart meter data refresh", "The ESB export is the stronger evidence source."],
+                ["3", "Investigate the highest-use days", "A small number of routines often explain most spikes."],
+                ["4", "Look at evening and overnight patterns", "These often reveal cooking, hot water, standby load, or timed appliances."],
+                ["5", "Download another ESB export next month", "A second month confirms whether patterns are persistent."],
+            ],
+            columns=["Rank", "Action", "Why it helps"],
+        )
+        st.dataframe(make_unique_columns(recommendations), hide_index=True, width="stretch")
+        with st.expander("Copy/paste supplier support message"):
+            st.text_area("Supplier message", value=supplier_message(dataset, tariff, total_kwh, total_cost["total"], min_day, max_day), height=280)
+
+    with tabs[1]:
+        st.markdown("### Usage patterns")
+        st.write("Use this tab to spot high days, quiet days, and whether your normal daily usage is drifting upward or downward.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### Daily electricity usage")
+            fig = px.line(safe_plot_df(daily), x="usage_date", y="usage_kwh", markers=True, labels={"usage_date": "Date", "usage_kwh": "kWh/day"})
+            fig.update_layout(height=360, margin=dict(l=10, r=10, t=20, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+        with c2:
+            st.markdown("#### Rolling 7-day average")
+            chart_daily = safe_plot_df(daily)
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=chart_daily["usage_date"], y=chart_daily["usage_kwh"], mode="lines+markers", name="Daily kWh", opacity=0.45))
+            fig.add_trace(go.Scatter(x=chart_daily["usage_date"], y=chart_daily["rolling_7_day_avg_kwh"], mode="lines", name="7-day average", line=dict(width=4)))
+            fig.update_layout(height=360, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="kWh/day")
+            st.plotly_chart(fig, use_container_width=True)
+
+        c3, c4 = st.columns(2)
+        with c3:
+            st.markdown("#### Highest usage days")
+            top_days = safe_plot_df(daily.nlargest(10, "usage_kwh").sort_values("usage_kwh"))
+            fig = px.bar(top_days, x="usage_kwh", y=top_days["usage_date"].dt.strftime("%d %b"), orientation="h", labels={"usage_kwh": "kWh", "y": "Date"})
+            fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+        with c4:
+            st.markdown("#### Distribution of daily usage")
+            fig = px.histogram(safe_plot_df(daily), x="usage_kwh", nbins=18, labels={"usage_kwh": "kWh/day"})
+            fig.add_vline(x=avg_daily, line_dash="dash", line_color="#0f766e", annotation_text="Average")
+            fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="Days")
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("#### Weekday vs weekend")
+        weekday = daily.groupby("is_weekend", as_index=False).agg(avg_kwh=("usage_kwh", "mean"), median_kwh=("usage_kwh", "median"), days=("usage_kwh", "count"))
+        weekday["period"] = weekday["is_weekend"].map({False: "Weekday", True: "Weekend"})
+        weekday = make_unique_columns(weekday)
+        fig = px.bar(safe_plot_df(weekday), x="period", y=["avg_kwh", "median_kwh"], barmode="group", labels={"period": "", "value": "kWh/day", "variable": "Measure"})
+        fig.update_layout(height=340, margin=dict(l=10, r=10, t=20, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tabs[2]:
+        st.markdown("### Time-of-day analysis")
+        st.write("This view turns 30-minute meter readings into clues about routine. It cannot identify exact appliances, but it shows when to investigate.")
+        if interval_available and not hourly.empty:
+            c1, c2 = st.columns([1.2, 1])
+            with c1:
+                st.markdown("#### Average hourly usage profile")
+                fig = px.line(safe_plot_df(hourly), x="hour", y="avg_kw", markers=True, labels={"hour": "Hour starting", "avg_kw": "Average kW"})
+                fig.update_xaxes(dtick=2)
+                fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+            with c2:
+                st.markdown("#### Peak usage windows")
+                peak_table = peak_hours.copy()
+                peak_table["Window"] = peak_table["hour"].map(lambda h: f"{int(h):02d}:00-{(int(h) + 1) % 24:02d}:00")
+                peak_table["Average kW"] = peak_table["avg_kw"]
+                st.dataframe(make_unique_columns(peak_table[["Window", "Average kW"]]).style.format({"Average kW": "{:.2f}"}), hide_index=True, width="stretch")
+                if not np.isnan(baseload_kw):
+                    metric_card("Baseload estimate", f"{baseload_kw:.2f} kW", "Median average load from 02:00 to 05:00")
+                if not np.isnan(overnight_kwh):
+                    metric_card("Overnight share", f"{overnight_kwh / max(total_kwh, 0.01) * 100:.0f}%", f"{kwh(overnight_kwh)} from 23:00-07:00")
+
+            st.markdown("#### Day/hour heatmap")
+            heat = safe_plot_df(interval.dropna(subset=["interval_kwh"]).copy())
+            heat["date_label"] = pd.to_datetime(heat["usage_date"]).dt.strftime("%d %b")
+            heat_table = heat.pivot_table(index="date_label", columns="hour", values="interval_kwh", aggfunc="sum")
+            fig = go.Figure(data=go.Heatmap(z=heat_table.values, x=heat_table.columns, y=heat_table.index, colorscale="YlOrRd", colorbar=dict(title="kWh")))
+            fig.update_layout(height=560, margin=dict(l=10, r=10, t=20, b=10), xaxis_title="Hour starting", yaxis_title="Date")
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("### Possible appliance behaviour")
+            a1, a2 = st.columns(2)
+            with a1:
+                insight_card("Evening routines", "Sharp rises after 17:00 often point to normal household activity.", "Evening peaks are common, but expensive if several high-power appliances overlap.", "Cooking, electric shower, immersion, tumble dryer, dishwasher, washing machine, or heating controls.", "On the next high-use evening, note what runs during the top peak hours.")
+            with a2:
+                insight_card("Overnight usage", f"The overnight baseload estimate is {baseload_kw:.2f} kW.", "Always-on use is easy to miss because it does not feel like an event.", "Fridge/freezer, router, standby loads, pumps, dehumidifier, timed hot water, or charging.", "Try a quick evening audit of timers and always-on devices.")
+            st.markdown("#### Typical appliance guide")
+            st.dataframe(make_unique_columns(APPLIANCE_EXAMPLES), hide_index=True, width="stretch")
+        else:
+            st.info("Upload a 30-minute kWh or kW file to unlock hourly profiles, heatmaps, baseload estimates, and appliance-timing clues.")
+
+    with tabs[3]:
+        st.markdown("### Tariff and estimated cost analysis")
+        st.write("This uses the tariff inputs in the sidebar. It is an estimate, because real bills can include prior balances, discounts, credits, VAT treatment, and corrections.")
+
+        if dnp_cols:
+            st.markdown("#### Day / night / peak usage split")
+            split = pd.DataFrame(
+                {
+                    "Period": ["Night", "Day off-peak", "Peak"],
+                    "kWh": [
+                        float(daily.get("night_kwh", pd.Series(dtype=float)).sum()),
+                        float(daily.get("day_off_peak_kwh", pd.Series(dtype=float)).sum()),
+                        float(daily.get("peak_kwh", pd.Series(dtype=float)).sum()),
+                    ],
+                }
+            )
+            split["Estimated usage charge"] = split["kWh"] * tariff["unit_rate_cent"] / 100
+            d1, d2 = st.columns(2)
+            with d1:
+                fig = px.bar(safe_plot_df(split), x="Period", y="kWh", text=split["kWh"].round(1), labels={"kWh": "kWh"})
+                fig.update_layout(height=340, margin=dict(l=10, r=10, t=20, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+            with d2:
+                fig = px.pie(safe_plot_df(split), names="Period", values="kWh", hole=0.45)
+                fig.update_layout(height=340, margin=dict(l=10, r=10, t=20, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Upload the daily day/night/peak file to see tariff-period behaviour. Usage and cost estimates still work from daily or interval totals.")
+
+        st.markdown("#### Estimated bill breakdown")
+        breakdown = pd.DataFrame(
+            [
+                ["Usage charge", total_cost["usage_charge"]],
+                ["Standing charge", total_cost["standing_charge"]],
+                ["PSO levy", total_cost["pso_levy"]],
+                ["Export credit", -total_cost["export_credit"]],
+            ],
+            columns=["Component", "EUR"],
+        )
+        b1, b2 = st.columns([1.1, 1])
+        with b1:
+            fig = px.bar(safe_plot_df(breakdown), x="Component", y="EUR", text=breakdown["EUR"].map(lambda x: f"€{x:.2f}"))
+            fig.update_layout(height=340, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="€")
+            st.plotly_chart(fig, use_container_width=True)
+        with b2:
+            metric_card("Usage charge", euro(total_cost["usage_charge"]), f"{tariff['unit_rate_cent']:.2f}c/kWh")
+            metric_card("Fixed charges", euro(total_cost["standing_charge"] + total_cost["pso_levy"]), "Standing charge + PSO")
+            metric_card("Export credit", euro(total_cost["export_credit"]), "Only when export data exists or is entered")
+
+        st.markdown("### Tariff simulator")
+        s1, s2 = st.columns(2)
+        with s1:
+            start = st.date_input("Billing period start", value=min_day, min_value=min_day, max_value=max_day, key="analytics_cost_start")
+        with s2:
+            end = st.date_input("Billing period end", value=max_day, min_value=min_day, max_value=max_day, key="analytics_cost_end")
+        if start > end:
+            st.warning("Start date must be before end date.")
+        else:
+            selected = daily[(daily["usage_date"].dt.date >= start) & (daily["usage_date"].dt.date <= end)]
+            selected_kwh = float(selected["usage_kwh"].sum())
+            selected_export = float(selected.get("export_kwh", pd.Series(dtype=float)).sum())
+            sim_cols = st.columns(4)
+            with sim_cols[0]:
+                sim_unit_rate = st.number_input("Unit rate, cent/kWh", min_value=0.0, value=float(tariff["unit_rate_cent"]), step=0.1, key="analytics_sim_unit")
+            with sim_cols[1]:
+                sim_standing = st.number_input("Standing charge, €/year", min_value=0.0, value=float(tariff["standing_charge_year"]), step=1.0, key="analytics_sim_standing")
+            with sim_cols[2]:
+                sim_pso = st.number_input("PSO levy, €/year", min_value=0.0, value=float(tariff["pso_levy_year"]), step=1.0, key="analytics_sim_pso")
+            with sim_cols[3]:
+                export_for_period = st.number_input("Export kWh, if known", min_value=0.0, value=selected_export, step=1.0, key="analytics_sim_export")
+            sim_tariff = {**tariff, "unit_rate_cent": sim_unit_rate, "standing_charge_year": sim_standing, "pso_levy_year": sim_pso}
+            days = (end - start).days + 1
+            selected_cost = cost_for_period(selected_kwh, days, sim_tariff, export_for_period)
+            cols = st.columns(5)
+            with cols[0]:
+                metric_card("Selected usage", kwh(selected_kwh), f"{days} days")
+            with cols[1]:
+                metric_card("Estimated cost", euro(selected_cost["total"]), "Usage + standing + PSO - export")
+            with cols[2]:
+                metric_card("Usage charge", euro(selected_cost["usage_charge"]), f"{sim_unit_rate:.2f}c/kWh")
+            with cols[3]:
+                metric_card("Fixed charges", euro(selected_cost["standing_charge"] + selected_cost["pso_levy"]), "Standing + PSO")
+            with cols[4]:
+                metric_card("Annualised cost", euro(selected_cost["annualised_cost"]), "Based on selected period")
+
+            st.markdown("#### What-if comparisons")
+            scenario_rows = []
+            for label, rate_multiplier, standing_multiplier in [
+                ("Current inputs", 1.0, 1.0),
+                ("Unit rate 10% lower", 0.9, 1.0),
+                ("Unit rate 10% higher", 1.1, 1.0),
+                ("Standing charge 10% lower", 1.0, 0.9),
+                ("Standing charge 10% higher", 1.0, 1.1),
+            ]:
+                scenario_tariff = {**sim_tariff, "unit_rate_cent": sim_unit_rate * rate_multiplier, "standing_charge_year": sim_standing * standing_multiplier}
+                scenario_cost = cost_for_period(selected_kwh, days, scenario_tariff, export_for_period)
+                scenario_rows.append([label, scenario_tariff["unit_rate_cent"], scenario_tariff["standing_charge_year"], scenario_cost["total"], scenario_cost["annualised_cost"]])
+            scenarios = pd.DataFrame(scenario_rows, columns=["Scenario", "Unit rate cent/kWh", "Standing charge €/year", "Selected period cost", "Annualised cost"])
+            fig = px.bar(safe_plot_df(scenarios), x="Scenario", y="Selected period cost", text=scenarios["Selected period cost"].map(lambda x: f"€{x:.0f}"))
+            fig.update_layout(height=340, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="€")
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(make_unique_columns(scenarios).style.format({"Unit rate cent/kWh": "{:.2f}", "Standing charge €/year": "€{:.2f}", "Selected period cost": "€{:.2f}", "Annualised cost": "€{:.2f}"}), hide_index=True, width="stretch")
+
+            if tariff.get("supplier_app_kwh") is not None:
+                app_kwh = float(tariff["supplier_app_kwh"])
+                app_cost = cost_for_period(app_kwh, days, sim_tariff, export_for_period)
+                comparison = pd.DataFrame([["ESB-derived usage", selected_kwh, selected_cost["total"]], ["Supplier app reported usage", app_kwh, app_cost["total"]]], columns=["Scenario", "kWh", "Estimated total cost"])
+                fig = px.bar(safe_plot_df(comparison), x="Scenario", y="kWh", text=comparison["kWh"].round(1))
+                fig.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+
+        if export_available:
+            st.success(f"Export data appears to be present. Estimated uploaded-period export credit is {euro(total_cost['export_credit'])}.")
+        else:
+            st.caption("No export data was detected. Solar export credits are only included when export kWh is uploaded or entered in the simulator.")
+
+        st.markdown("#### Monthly estimated costs")
+        st.dataframe(
+            make_unique_columns(monthly[["month", "total_kwh", "days", "usage_charge_eur", "standing_charge_eur", "pso_levy_eur", "total_estimated_cost_eur"]]).style.format(
+                {
+                    "total_kwh": "{:.1f}",
+                    "usage_charge_eur": "€{:.2f}",
+                    "standing_charge_eur": "€{:.2f}",
+                    "pso_levy_eur": "€{:.2f}",
+                    "total_estimated_cost_eur": "€{:.2f}",
+                }
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+
+    with tabs[4]:
+        st.markdown("### Data quality")
+        st.write("These checks tell you whether the upload is reliable enough for homeowner decisions, supplier conversations, and bill sense-checks.")
+        q1, q2, q3, q4 = st.columns(4)
+        with q1:
+            metric_card("Confidence score", f"{confidence_score}/100", confidence_label)
+        with q2:
+            metric_card("Missing intervals", f"{len(missing):,}", "30-minute slots")
+        with q3:
+            metric_card("Estimated reads", f"{estimated_reads:,}", "Detected from read type text")
+        with q4:
+            metric_card("Uploaded files", f"{len(parsed or []):,}", "Detected automatically")
+
+        with st.expander("Uploaded data diagnostics", expanded=False):
+            if parsed is not None:
+                render_file_detection(parsed)
+            duplicate_rows = []
+            for label, frame in [("daily", daily), ("interval", interval), ("monthly", monthly), ("quality", quality), ("missing intervals", missing)]:
+                duplicate_rows.append({"Dataframe": label, "Columns": ", ".join(map(str, frame.columns)), "Duplicate columns currently present": ", ".join(duplicate_columns(frame)) or "None"})
+            st.dataframe(make_unique_columns(pd.DataFrame(duplicate_rows)), hide_index=True, width="stretch")
+
+        if not missing.empty:
+            st.warning(f"Missing interval range: {missing['missing_timestamp'].min()} to {missing['missing_timestamp'].max()}.")
+            gaps = missing.copy()
+            gaps["missing_timestamp"] = pd.to_datetime(gaps["missing_timestamp"])
+            gaps = gaps.sort_values("missing_timestamp")
+            gaps["gap_id"] = (gaps["missing_timestamp"].diff().dt.total_seconds().fillna(1800) > 1800).cumsum()
+            gap_summary = gaps.groupby("gap_id", as_index=False).agg(gap_start=("missing_timestamp", "min"), gap_end=("missing_timestamp", "max"), missing_intervals=("missing_timestamp", "count"))
+            gap_summary["approx_hours"] = gap_summary["missing_intervals"] * 0.5
+            st.markdown("#### Missing interval gaps")
+            st.dataframe(make_unique_columns(gap_summary).style.format({"approx_hours": "{:.1f}"}), hide_index=True, width="stretch")
+        else:
+            st.success("No missing 30-minute intervals were detected in the interval file.")
+
+        st.markdown("#### Quality check results")
+        status_order = {"Problem": 0, "Check": 1, "OK": 2}
+        quality_display = quality.copy()
+        quality_display["_sort"] = quality_display["status"].map(status_order).fillna(3)
+        quality_display = quality_display.sort_values("_sort").drop(columns=["_sort"])
+        for _, row in quality_display.iterrows():
+            st.markdown(f"<p><span class='{status_class(row['status'])}'>{row['status']}</span> — <b>{row['check']}</b>: {row['value']}</p>", unsafe_allow_html=True)
+
+        st.markdown("#### Plain-English readout")
+        if "Problem" in set(quality["status"]):
+            st.error("There are data issues worth checking before relying on exact totals.")
+        elif "Check" in set(quality["status"]):
+            st.warning("The data is usable, but at least one check deserves attention.")
+        else:
+            st.success("The uploaded meter data looks usable for homeowner-level insight.")
+        st.write("A supplier app can still be stale or partially synced even when the ESB export itself looks consistent.")
+        with st.expander("Assumptions"):
+            st.markdown(
+                """
+                - ESB timestamps are treated as local Irish meter time.
+                - Interval readings are treated as 30-minute values ending at the timestamp shown.
+                - Daily register files may be cumulative, so daily usage can be calculated by subtracting one day from the next.
+                - If both daily and interval files are present, daily register totals are preferred for daily/monthly totals.
+                - Export credit is only applied when export data is uploaded or entered in the cost simulator.
+                """
+            )
+
+
 def render_upload_flow() -> tuple[dict | None, list[ParsedUpload]]:
     st.markdown("## Start here")
     mode = st.radio("Choose data source", ["Upload ESB CSV files", "Try demo mode"], horizontal=True)
@@ -1122,7 +1533,7 @@ def main() -> None:
     tariff = tariff_form()
     dataset, parsed = render_upload_flow()
     if dataset is not None:
-        render_dashboard(dataset, tariff, parsed)
+        render_analytics_dashboard(dataset, tariff, parsed)
 
 
 if __name__ == "__main__":
