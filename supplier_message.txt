@@ -1,0 +1,18 @@
+Hello,
+
+I have downloaded my ESB Networks HDF smart meter CSV files and compared them with the usage shown in my supplier app.
+
+For the billing period I checked, the ESB-derived smart meter usage appears to differ from the usage shown in the supplier app.
+
+Key evidence:
+
+- ESB-derived usage: [insert kWh from dashboard]
+- Supplier app reported usage: [insert app kWh, if available]
+- Estimated cost using my tariff inputs: [insert dashboard estimate]
+- The uploaded ESB interval/daily data appears internally consistent based on the dashboard quality checks.
+
+Please refresh or re-sync the smart meter usage data for my account and confirm that the correct MPRN is mapped to my supplier account and app profile.
+
+Please also confirm whether billing will be based on the ESB Networks meter data rather than the app display.
+
+Thank you.
