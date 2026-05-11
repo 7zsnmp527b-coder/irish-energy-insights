@@ -14,8 +14,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-APP_TITLE = "ESB Smart Meter Insight"
-APP_TAGLINE = "Upload your ESB smart meter CSV files and get a clear electricity usage, cost, and supplier-accuracy dashboard."
+APP_TITLE = "Irish Energy Insights"
+APP_TAGLINE = "Upload your ESB smart meter data and get a plain-English energy health check for your home."
 
 DEFAULT_TARIFF = {
     "supplier_name": "",
@@ -62,7 +62,7 @@ st.markdown(
     .block-container { padding-top: 1.25rem; padding-bottom: 3rem; }
     .hero {
         border: 1px solid #dbe5ef;
-        background: linear-gradient(135deg, #f7fbff 0%, #effaf4 100%);
+        background: linear-gradient(135deg, #f7fbff 0%, #eefaf3 60%, #fff8ed 100%);
         border-radius: 8px;
         padding: 1.1rem 1.2rem;
         margin-bottom: 1rem;
@@ -75,6 +75,7 @@ st.markdown(
         padding: .9rem;
         background: #ffffff;
         min-height: 112px;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, .04);
     }
     .metric-card .label { color: #64748b; font-size: .82rem; margin-bottom: .2rem; }
     .metric-card .value { color: #0f172a; font-size: 1.45rem; font-weight: 700; }
@@ -87,6 +88,37 @@ st.markdown(
         margin-bottom: .75rem;
     }
     .insight-card h4 { margin: 0 0 .35rem 0; }
+    .advisor-card {
+        border: 1px solid #dbe5ef;
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 1rem;
+        margin-bottom: .85rem;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, .04);
+    }
+    .advisor-card h4 { margin: 0 0 .35rem 0; }
+    .score-card {
+        border-radius: 8px;
+        padding: 1.15rem;
+        background: #0f172a;
+        color: white;
+        margin-bottom: .85rem;
+    }
+    .score-card .score { font-size: 3.4rem; font-weight: 800; line-height: 1; }
+    .score-card .score-label { color: #cbd5e1; margin-top: .35rem; }
+    .pill {
+        display: inline-block;
+        border-radius: 999px;
+        padding: .18rem .55rem;
+        font-size: .78rem;
+        font-weight: 700;
+        margin-right: .25rem;
+        border: 1px solid transparent;
+    }
+    .pill-low { color: #166534; background: #dcfce7; border-color: #bbf7d0; }
+    .pill-moderate { color: #92400e; background: #fef3c7; border-color: #fde68a; }
+    .pill-high { color: #991b1b; background: #fee2e2; border-color: #fecaca; }
+    .pill-neutral { color: #1e3a8a; background: #dbeafe; border-color: #bfdbfe; }
     .status-ok { color: #166534; font-weight: 700; }
     .status-amber { color: #b45309; font-weight: 700; }
     .status-red { color: #b91c1c; font-weight: 700; }
@@ -204,14 +236,14 @@ def landing_page() -> None:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown("### What it explains")
-        st.write("How much electricity you used, when you use most, what it may cost, and whether supplier app figures look believable.")
+        st.markdown("### Energy health check")
+        st.write("See whether your home looks low, typical or high use, what may be driving it, and what is worth checking first.")
     with c2:
-        st.markdown("### How it works")
-        st.write("You manually upload ESB Networks HDF CSV files. The app detects the confusing file types and builds the dashboard.")
+        st.markdown("### Smart meter upload")
+        st.write("Upload ESB Networks HDF CSV files. The app detects the confusing file names and turns them into plain-English insights.")
     with c3:
-        st.markdown("### Privacy")
-        st.write("Version 1 does not ask for ESB login details and does not permanently store uploaded files.")
+        st.markdown("### Private by design")
+        st.write("No ESB login details are requested. Files are processed for the current app session and are not intentionally stored.")
 
 
 def onboarding_guide() -> None:
@@ -226,16 +258,16 @@ def onboarding_guide() -> None:
         6. Download the available **HDF CSV** files.
         7. Upload those CSV files here.
 
-        The file names can look confusing. That is normal. The app looks inside each file and detects whether it is half-hour kW, half-hour kWh, daily total, day/night/peak, or export data.
+        The file names can look confusing. That is normal. Upload what ESB gives you and the app looks inside each file to detect half-hour kW, half-hour kWh, daily total, day/night/peak, or export data.
         """
     )
 
 
 def privacy_note() -> None:
     st.info(
-        "Privacy note: this upload-based version reads files in memory for the current dashboard session. "
-        "It does not ask for ESB login details and does not intentionally save uploaded files. "
-        "If you export or share screenshots, you can remove personal identifiers such as MPRN and meter serial number first."
+        "Privacy note: this app uses manual CSV upload only. It does not ask for ESB login details, usernames or passwords. "
+        "Uploaded files are processed for the current dashboard session and are not intentionally saved by the app. "
+        "If you share screenshots or CSV files, consider removing personal identifiers such as MPRN, meter serial number and address details first."
     )
 
 
@@ -756,6 +788,364 @@ def render_file_detection(parsed: list[ParsedUpload]) -> None:
     st.dataframe(make_unique_columns(pd.DataFrame(rows)), hide_index=True, width="stretch")
 
 
+def pill(label: str, level: str) -> str:
+    level_key = str(level).lower().replace(" ", "-")
+    if level_key not in {"low", "moderate", "high"}:
+        level_key = "neutral"
+    return f"<span class='pill pill-{level_key}'>{label}: {level}</span>"
+
+
+def advisor_card(title: str, body: str, detail: str = "", level: str | None = None) -> None:
+    level_html = f"<div>{pill('Signal', level)}</div>" if level else ""
+    detail_html = f"<p class='muted'>{detail}</p>" if detail else ""
+    st.markdown(
+        f"""
+        <div class="advisor-card">
+            <h4>{title}</h4>
+            {level_html}
+            <p>{body}</p>
+            {detail_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def classify_usage(annualised_kwh: float) -> str:
+    if annualised_kwh < 2500:
+        return "low"
+    if annualised_kwh <= 5000:
+        return "typical"
+    return "high"
+
+
+def classify_low_mod_high(value: float, low_limit: float, high_limit: float) -> str:
+    if pd.isna(value):
+        return "unknown"
+    if value < low_limit:
+        return "low"
+    if value <= high_limit:
+        return "moderate"
+    return "high"
+
+
+def build_advisor_model(
+    daily: pd.DataFrame,
+    interval: pd.DataFrame,
+    monthly: pd.DataFrame,
+    quality: pd.DataFrame,
+    missing: pd.DataFrame,
+    tariff: dict,
+    export_kwh: float,
+    parsed: list[ParsedUpload] | None,
+) -> dict:
+    """Create plain-English V2 intelligence from the cleaned ESB dataset."""
+    min_day = daily["usage_date"].min().date()
+    max_day = daily["usage_date"].max().date()
+    period_days = max((max_day - min_day).days + 1, 1)
+    total_kwh = float(daily["usage_kwh"].sum())
+    avg_daily = float(daily["usage_kwh"].mean())
+    median_daily = float(daily["usage_kwh"].median())
+    annualised_kwh = avg_daily * 365
+    total_cost = cost_for_period(total_kwh, period_days, tariff, export_kwh)
+
+    problem_count = int((quality["status"] == "Problem").sum()) if "status" in quality.columns else 0
+    check_count = int((quality["status"] == "Check").sum()) if "status" in quality.columns else 0
+    missing_penalty = min(20, int(len(missing) / max(period_days, 1))) if not missing.empty else 0
+    confidence_score = max(0, min(100, 96 - problem_count * 28 - check_count * 8 - missing_penalty))
+    confidence_label = "High" if confidence_score >= 85 else "Medium" if confidence_score >= 65 else "Needs checking"
+
+    interval_available = not interval.empty and "interval_kwh" in interval.columns
+    hourly = pd.DataFrame()
+    baseload_kw = np.nan
+    always_on_watts = np.nan
+    daily_baseload_kwh = np.nan
+    monthly_baseload_cost = np.nan
+    annual_baseload_cost = np.nan
+    overnight_kwh = np.nan
+    evening_peak_kw = np.nan
+    evening_peak_ratio = np.nan
+    morning_ratio = np.nan
+    peak_hours = pd.DataFrame()
+    if interval_available:
+        hourly = interval.dropna(subset=["interval_kwh"]).groupby("hour", as_index=False).agg(avg_kwh=("interval_kwh", "mean"))
+        hourly = make_unique_columns(hourly)
+        if not hourly.empty:
+            hourly["avg_kw"] = hourly["avg_kwh"] * 2
+            peak_hours = hourly.nlargest(4, "avg_kw")
+            overnight_mask = interval["hour"].isin([23, 0, 1, 2, 3, 4, 5, 6])
+            overnight_kwh = float(interval.loc[overnight_mask, "interval_kwh"].sum())
+            overnight_loads = hourly.loc[hourly["hour"].between(2, 5), "avg_kw"]
+            if not overnight_loads.empty:
+                baseload_kw = float(overnight_loads.quantile(0.25))
+                always_on_watts = baseload_kw * 1000
+                daily_baseload_kwh = baseload_kw * 24
+                monthly_baseload_cost = daily_baseload_kwh * 30.4 * tariff["unit_rate_cent"] / 100
+                annual_baseload_cost = daily_baseload_kwh * 365 * tariff["unit_rate_cent"] / 100
+            normal_hours = hourly.loc[hourly["hour"].between(9, 16), "avg_kw"]
+            evening_hours = hourly.loc[hourly["hour"].between(18, 21), "avg_kw"]
+            morning_hours = hourly.loc[hourly["hour"].between(6, 9), "avg_kw"]
+            if not evening_hours.empty:
+                evening_peak_kw = float(evening_hours.max())
+            if not normal_hours.empty and float(normal_hours.median()) > 0:
+                evening_peak_ratio = float(evening_hours.mean() / normal_hours.median()) if not evening_hours.empty else np.nan
+                morning_ratio = float(morning_hours.mean() / normal_hours.median()) if not morning_hours.empty else np.nan
+
+    usage_level = classify_usage(annualised_kwh)
+    baseload_level = classify_low_mod_high(always_on_watts, 120, 300)
+    evening_peak_level = classify_low_mod_high(evening_peak_ratio, 1.2, 1.8)
+    score = 100
+    score -= {"low": 0, "typical": 8, "high": 20}.get(usage_level, 8)
+    score -= {"low": 0, "moderate": 10, "high": 22}.get(baseload_level, 8)
+    score -= {"low": 0, "moderate": 7, "high": 15}.get(evening_peak_level, 6)
+    score -= max(0, 90 - confidence_score) // 3
+    energy_score = int(max(30, min(98, score)))
+
+    peak_day = daily.loc[daily["usage_kwh"].idxmax()]
+    non_zero_days = daily[daily["usage_kwh"] > 0]
+    quiet_day = non_zero_days.loc[non_zero_days["usage_kwh"].idxmin()] if not non_zero_days.empty else daily.loc[daily["usage_kwh"].idxmin()]
+    weekday_stats = daily.groupby("is_weekend")["usage_kwh"].mean()
+    weekday_avg = float(weekday_stats.get(False, np.nan))
+    weekend_avg = float(weekday_stats.get(True, np.nan))
+    weekend_diff_pct = (weekend_avg - weekday_avg) / weekday_avg * 100 if pd.notna(weekday_avg) and weekday_avg else np.nan
+    recent_days = min(14, len(daily))
+    recent_avg = float(daily.tail(recent_days)["usage_kwh"].mean()) if recent_days else avg_daily
+    projected_next_bill = cost_for_period(recent_avg * 30.4, 30, tariff, 0.0)
+
+    estimated_reads = 0
+    for item in parsed or []:
+        if "read_type" in item.frame.columns:
+            estimated_reads += int(item.frame["read_type"].astype(str).str.contains("estimate|estimated", case=False, na=False).sum())
+
+    summary = (
+        f"This home looks like a {usage_level} electricity user based on the uploaded period. "
+        f"Average daily use is {avg_daily:.1f} kWh and the annualised estimate is about {annualised_kwh:,.0f} kWh. "
+    )
+    if baseload_level != "unknown":
+        summary += f"The always-on load looks {baseload_level}, at roughly {always_on_watts:.0f} watts overnight. "
+    if evening_peak_level != "unknown":
+        summary += f"Evening usage looks {evening_peak_level} compared with daytime background use."
+
+    return {
+        "min_day": min_day,
+        "max_day": max_day,
+        "period_days": period_days,
+        "total_kwh": total_kwh,
+        "avg_daily": avg_daily,
+        "median_daily": median_daily,
+        "annualised_kwh": annualised_kwh,
+        "total_cost": total_cost,
+        "confidence_score": confidence_score,
+        "confidence_label": confidence_label,
+        "energy_score": energy_score,
+        "usage_level": usage_level,
+        "baseload_level": baseload_level,
+        "evening_peak_level": evening_peak_level,
+        "hourly": hourly,
+        "peak_hours": peak_hours,
+        "baseload_kw": baseload_kw,
+        "always_on_watts": always_on_watts,
+        "daily_baseload_kwh": daily_baseload_kwh,
+        "monthly_baseload_cost": monthly_baseload_cost,
+        "annual_baseload_cost": annual_baseload_cost,
+        "overnight_kwh": overnight_kwh,
+        "evening_peak_kw": evening_peak_kw,
+        "evening_peak_ratio": evening_peak_ratio,
+        "morning_ratio": morning_ratio,
+        "peak_day": peak_day,
+        "quiet_day": quiet_day,
+        "weekday_avg": weekday_avg,
+        "weekend_avg": weekend_avg,
+        "weekend_diff_pct": weekend_diff_pct,
+        "recent_avg": recent_avg,
+        "projected_next_bill": projected_next_bill,
+        "estimated_reads": estimated_reads,
+        "summary": summary,
+    }
+
+
+def behavioural_insights(ctx: dict, daily: pd.DataFrame) -> list[dict]:
+    insights: list[dict] = []
+    if pd.notna(ctx["morning_ratio"]):
+        level = classify_low_mod_high(ctx["morning_ratio"], 1.15, 1.6)
+        insights.append(
+            {
+                "title": "Morning pattern",
+                "finding": f"Morning usage is {level} compared with daytime background use.",
+                "why": "Morning peaks often reflect showers, breakfast, heating, kettles, or appliances starting up.",
+                "check": "If this is high, compare meter peaks with shower, immersion and heating schedules.",
+            }
+        )
+    if pd.notna(ctx["evening_peak_ratio"]):
+        window = "18:00-21:00"
+        if not ctx["peak_hours"].empty:
+            start_hour = int(ctx["peak_hours"].iloc[0]["hour"])
+            window = f"{start_hour:02d}:00-{(start_hour + 3) % 24:02d}:00"
+        insights.append(
+            {
+                "title": "Evening pattern",
+                "finding": f"Your strongest usage window is around {window}.",
+                "why": "This often points to cooking, laundry, heating, hot water, or general evening household activity.",
+                "check": "Look at the highest-use days and note what ran during that window.",
+            }
+        )
+    if pd.notna(ctx["weekend_diff_pct"]):
+        direction = "higher" if ctx["weekend_diff_pct"] > 0 else "lower"
+        insights.append(
+            {
+                "title": "Weekend vs weekday",
+                "finding": f"Weekend usage is about {abs(ctx['weekend_diff_pct']):.0f}% {direction} than weekday usage.",
+                "why": "A weekend jump usually means more time at home, laundry, cooking, heating, or EV charging.",
+                "check": "Compare weekend routines with weekday routines before changing anything.",
+            }
+        )
+    if pd.notna(ctx["overnight_kwh"]):
+        overnight_share = ctx["overnight_kwh"] / max(ctx["total_kwh"], 0.01) * 100
+        insights.append(
+            {
+                "title": "Overnight usage",
+                "finding": f"About {overnight_share:.0f}% of uploaded usage happens between 23:00 and 07:00.",
+                "why": "Overnight use can be normal, but it is where always-on loads and timers hide.",
+                "check": "Check immersion, storage heating, charging, pumps, dehumidifiers and standby loads.",
+            }
+        )
+    top_days = daily.nlargest(min(3, len(daily)), "usage_kwh")
+    if not top_days.empty:
+        day_list = ", ".join(pd.to_datetime(top_days["usage_date"]).dt.strftime("%d %b").tolist())
+        insights.append(
+            {
+                "title": "Highest-use days",
+                "finding": f"Your biggest days were {day_list}.",
+                "why": "A few high days can explain a noticeable part of the monthly bill.",
+                "check": "Look for laundry batches, guests, heating, EV charging, or hot-water use on those dates.",
+            }
+        )
+    quiet_threshold = max(ctx["median_daily"] * 0.55, 0.5)
+    quiet_count = int((daily["usage_kwh"] < quiet_threshold).sum())
+    if quiet_count:
+        insights.append(
+            {
+                "title": "Unusually quiet days",
+                "finding": f"{quiet_count} day(s) were much quieter than your normal pattern.",
+                "why": "Quiet days show what the home can use when fewer appliances are running.",
+                "check": "Use quiet days as a comparison point for baseload and routine changes.",
+            }
+        )
+    return insights
+
+
+def appliance_clues(ctx: dict, daily: pd.DataFrame, interval: pd.DataFrame) -> pd.DataFrame:
+    rows: list[list[str]] = []
+    if pd.notna(ctx["evening_peak_ratio"]) and ctx["evening_peak_ratio"] >= 1.4:
+        rows.append(["Cooking / evening routine", "medium", "Evening usage is materially above daytime background use.", "Could be consistent with cooking, laundry, dishwasher, tumble dryer, showers or heating controls."])
+    if pd.notna(ctx["always_on_watts"]) and ctx["always_on_watts"] > 300:
+        rows.append(["Standby / baseload", "high", f"Estimated always-on load is about {ctx['always_on_watts']:.0f} watts.", "Worth checking appliances, pumps, dehumidifiers, routers, chargers, fridges/freezers and anything timed overnight."])
+    elif pd.notna(ctx["always_on_watts"]) and ctx["always_on_watts"] > 150:
+        rows.append(["Standby / baseload", "medium", f"Estimated always-on load is about {ctx['always_on_watts']:.0f} watts.", "Could be normal, but small continuous loads add up over a year."])
+    if not interval.empty and "interval_kw" in interval.columns:
+        high_power_count = int((interval["interval_kw"] >= 6).sum())
+        medium_power_count = int((interval["interval_kw"] >= 3).sum())
+        night_high = int(((interval["interval_kw"] >= 3) & (interval["hour"].isin([23, 0, 1, 2, 3, 4, 5, 6]))).sum())
+        if high_power_count >= 2:
+            rows.append(["EV charging / electric shower", "medium", "There are short high-power intervals above roughly 6 kW.", "This may suggest EV charging, electric shower use, or another high-power appliance. Check timing before drawing conclusions."])
+        if medium_power_count >= 4:
+            rows.append(["Immersion / tumble dryer / heating", "medium", "Several intervals sit above roughly 3 kW.", "Could be consistent with immersion heating, tumble drying, electric heating, or multiple appliances overlapping."])
+        if night_high >= 4:
+            rows.append(["Storage heating / timed hot water", "medium", "Repeated higher-power intervals appear overnight.", "This could be consistent with storage heating, timed immersion, EV charging, or other night-time schedules."])
+    if ctx["usage_level"] == "high":
+        rows.append(["Heat pump / electric heating", "low", "Annualised usage is in the high range.", "High all-day usage can be consistent with electric space heating or heat pumps, but occupancy and home size matter a lot."])
+    if not rows:
+        rows.append(["No strong appliance clue", "low", "No single pattern strongly stands out from the uploaded data.", "Use the charts to compare high days with real household activity."])
+    return pd.DataFrame(rows, columns=["Possible category", "Confidence", "Why it was flagged", "Plain-English interpretation"])
+
+
+def savings_recommendations(ctx: dict, tariff: dict) -> pd.DataFrame:
+    rows: list[list[str]] = []
+    if pd.notna(ctx["annual_baseload_cost"]) and ctx["baseload_level"] in {"moderate", "high"}:
+        saving = ctx["annual_baseload_cost"] * (0.15 if ctx["baseload_level"] == "moderate" else 0.25)
+        rows.append([
+            "Reduce overnight baseload",
+            f"Always-on load is estimated at about {ctx['always_on_watts']:.0f} watts.",
+            saving,
+            "medium" if ctx["baseload_level"] == "moderate" else "high",
+            "Check timers, standby devices, pumps, dehumidifiers, chargers and anything warm or running overnight.",
+        ])
+    if ctx["evening_peak_level"] in {"moderate", "high"}:
+        saving = max(ctx["total_cost"]["annualised_cost"] * 0.03, 20)
+        rows.append([
+            "Tame evening peaks",
+            f"Evening use looks {ctx['evening_peak_level']} compared with daytime background use.",
+            saving,
+            "medium",
+            "Avoid stacking tumble dryer, oven, immersion, dishwasher and shower use at the same time where practical.",
+        ])
+    if tariff["unit_rate_cent"] >= 30 or tariff["standing_charge_year"] >= 280:
+        rows.append([
+            "Review tariff",
+            "The entered tariff has a relatively high unit rate or standing charge.",
+            max(ctx["total_cost"]["annualised_cost"] * 0.05, 35),
+            "low",
+            "Compare plans using your annualised kWh estimate rather than generic national-average usage.",
+        ])
+    if pd.notna(ctx["overnight_kwh"]) and ctx["overnight_kwh"] / max(ctx["total_kwh"], 0.01) > 0.35:
+        rows.append([
+            "Check night-time schedules",
+            "A large share of usage appears overnight.",
+            max(ctx["total_cost"]["annualised_cost"] * 0.04, 25),
+            "medium",
+            "Review immersion, storage heating, EV charging, dishwasher, washing machine and dehumidifier timers.",
+        ])
+    rows.append([
+        "Compare supplier app against ESB data",
+        "Supplier app figures can be cached, stale or partially synced.",
+        0,
+        "high",
+        "Use ESB-derived totals when asking the supplier to refresh app data or confirm account/MPRN mapping.",
+    ])
+    out = pd.DataFrame(rows, columns=["Recommendation", "Why it was triggered", "Estimated annual saving", "Confidence", "Practical action"])
+    return out.sort_values("Estimated annual saving", ascending=False).reset_index(drop=True)
+
+
+def benchmark_table(ctx: dict, monthly: pd.DataFrame, tariff: dict) -> pd.DataFrame:
+    avg_monthly_kwh = float(monthly["total_kwh"].mean()) if not monthly.empty else ctx["avg_daily"] * 30.4
+    annual_cost = ctx["total_cost"]["annualised_cost"]
+    baseload_watts = ctx["always_on_watts"] if pd.notna(ctx["always_on_watts"]) else np.nan
+    return pd.DataFrame(
+        [
+            ["Annualised electricity", f"{ctx['annualised_kwh']:,.0f} kWh", "Low <2,500 | Typical 2,500-5,000 | High >5,000", ctx["usage_level"]],
+            ["Average daily electricity", f"{ctx['avg_daily']:.1f} kWh/day", "Low <7 | Typical 7-14 | High >14", classify_low_mod_high(ctx["avg_daily"], 7, 14)],
+            ["Average monthly electricity", f"{avg_monthly_kwh:.0f} kWh/month", "Low <210 | Typical 210-420 | High >420", classify_low_mod_high(avg_monthly_kwh, 210, 420)],
+            ["Always-on load", "n/a" if pd.isna(baseload_watts) else f"{baseload_watts:.0f} watts", "Low <120W | Moderate 120-300W | High >300W", ctx["baseload_level"]],
+            ["Annualised bill estimate", euro(annual_cost), "Depends heavily on tariff, standing charge, PSO and export credit", "estimate"],
+        ],
+        columns=["Benchmark", "Your estimate", "Approximate Irish home range", "Reading"],
+    )
+
+
+def trust_check(tariff: dict, esb_kwh: float) -> dict:
+    app_kwh = tariff.get("supplier_app_kwh")
+    if app_kwh is None:
+        return {
+            "has_app": False,
+            "severity": "Not checked",
+            "percent_diff": np.nan,
+            "message": "Enter the supplier app kWh figure in the sidebar to check whether it lines up with ESB-derived usage.",
+        }
+    app_kwh = float(app_kwh)
+    percent_diff = (esb_kwh - app_kwh) / max(app_kwh, 0.01) * 100
+    abs_diff = abs(percent_diff)
+    if abs_diff < 10:
+        severity = "Low"
+        msg = "The app figure is broadly aligned with ESB-derived usage."
+    elif abs_diff < 30:
+        severity = "Amber"
+        msg = "The app figure is noticeably different. This may reflect timing, billing-period mismatch, or partial sync."
+    else:
+        severity = "High"
+        msg = "The app figure is very different. This may indicate a supplier app sync/display issue, stale cache, partial data feed, or account/MPRN mapping problem."
+    return {"has_app": True, "severity": severity, "percent_diff": percent_diff, "message": msg, "app_kwh": app_kwh}
+
+
 def render_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedUpload] | None = None) -> None:
     daily = make_unique_columns(dataset["daily"])
     interval = make_unique_columns(dataset["interval"])
@@ -1077,6 +1467,11 @@ def render_analytics_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedU
     missing = make_unique_columns(dataset["missing"].copy())
     export_kwh = float(dataset.get("export_kwh", 0.0) or 0.0)
     messages = [str(m) for m in dataset.get("messages", []) if str(m).strip()]
+    ctx = build_advisor_model(daily, interval, monthly, quality, missing, tariff, export_kwh, parsed)
+    trust = trust_check(tariff, ctx["total_kwh"])
+    behaviour = behavioural_insights(ctx, daily)
+    clues = appliance_clues(ctx, daily, interval)
+    recs = savings_recommendations(ctx, tariff)
 
     min_day = daily["usage_date"].min().date()
     max_day = daily["usage_date"].max().date()
@@ -1135,9 +1530,108 @@ def render_analytics_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedU
     with kpi_cols[4]:
         metric_card("Confidence", f"{confidence_score}/100", confidence_label)
 
-    tabs = st.tabs(["Overview", "Usage Patterns", "Time-of-Day Analysis", "Tariff & Cost Analysis", "Data Quality"])
+    tabs = st.tabs(["Energy Health Check", "Overview", "Usage Patterns", "Time-of-Day Analysis", "Tariff & Cost Analysis", "Data Quality"])
 
     with tabs[0]:
+        st.markdown("### Energy Health Check")
+        st.write("A plain-English readout of what your ESB smart meter data suggests about your home. These are estimates and clues, not appliance-level proof.")
+        h1, h2 = st.columns([0.9, 1.4])
+        with h1:
+            st.markdown(
+                f"""
+                <div class="score-card">
+                    <div class="score">{ctx['energy_score']}</div>
+                    <div class="score-label">Energy score out of 100</div>
+                    <p>{ctx['summary']}</p>
+                    <div>
+                        {pill('Usage', ctx['usage_level'])}
+                        {pill('Baseload', ctx['baseload_level'])}
+                        {pill('Evening peak', ctx['evening_peak_level'])}
+                        {pill('Confidence', ctx['confidence_label'])}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with h2:
+            cards = st.columns(3)
+            with cards[0]:
+                metric_card("Annualised usage", kwh(ctx["annualised_kwh"]), f"{ctx['usage_level'].title()} range")
+            with cards[1]:
+                metric_card("Always-on load", "n/a" if pd.isna(ctx["always_on_watts"]) else f"{ctx['always_on_watts']:.0f} W", f"{ctx['baseload_level'].title()} baseload")
+            with cards[2]:
+                metric_card("Annual bill forecast", euro(ctx["total_cost"]["annualised_cost"]), "At current tariff inputs")
+            st.markdown("#### What this means")
+            st.write(ctx["summary"])
+            with st.expander("How the score is calculated"):
+                st.write(
+                    "The score starts from 100 and is reduced for high annualised usage, high always-on load, strong evening peaks, and weaker data confidence. "
+                    "It is designed as a practical homeowner signal, not an official rating."
+                )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### Top things worth checking")
+            checks = [
+                f"Overnight baseload: roughly {ctx['always_on_watts']:.0f} W" if pd.notna(ctx["always_on_watts"]) else "Upload interval data to estimate overnight baseload",
+                f"Highest-use day: {pd.Timestamp(ctx['peak_day']['usage_date']).strftime('%d %b')} at {ctx['peak_day']['usage_kwh']:.1f} kWh",
+                trust["message"] if trust["has_app"] else "Enter a supplier app usage figure if you want a trust check",
+            ]
+            for item in checks[:3]:
+                advisor_card("Check", item)
+        with c2:
+            st.markdown("#### Top savings opportunities")
+            display_recs = recs.head(3).copy()
+            for _, row in display_recs.iterrows():
+                saving = euro(row["Estimated annual saving"]) if float(row["Estimated annual saving"]) > 0 else "Evidence / bill accuracy"
+                advisor_card(row["Recommendation"], row["Practical action"], f"Estimated annual saving: {saving}. Confidence: {row['Confidence']}.")
+
+        st.markdown("### Baseload intelligence")
+        bcols = st.columns(5)
+        with bcols[0]:
+            metric_card("Overnight minimum", "n/a" if pd.isna(ctx["baseload_kw"]) else f"{ctx['baseload_kw']:.2f} kW", "02:00-05:00 estimate")
+        with bcols[1]:
+            metric_card("Always-on watts", "n/a" if pd.isna(ctx["always_on_watts"]) else f"{ctx['always_on_watts']:.0f} W", "Approximate continuous load")
+        with bcols[2]:
+            metric_card("Daily baseload", "n/a" if pd.isna(ctx["daily_baseload_kwh"]) else kwh(ctx["daily_baseload_kwh"]), "If it ran all day")
+        with bcols[3]:
+            metric_card("Monthly baseload cost", "n/a" if pd.isna(ctx["monthly_baseload_cost"]) else euro(ctx["monthly_baseload_cost"]), "Usage charge only")
+        with bcols[4]:
+            metric_card("Annual baseload cost", "n/a" if pd.isna(ctx["annual_baseload_cost"]) else euro(ctx["annual_baseload_cost"]), "Usage charge only")
+        st.write(
+            "Baseload is the electricity your home appears to use even when little is happening. "
+            "It often comes from fridge/freezer, router, pumps, standby devices, immersion timers, chargers, dehumidifiers or other always-on equipment. "
+            "The app estimates it from quiet overnight periods, so treat it as a useful clue rather than a measurement of one appliance."
+        )
+
+        st.markdown("### Behavioural pattern insights")
+        for insight in behaviour[:6]:
+            advisor_card(insight["title"], insight["finding"], f"{insight['why']} What to check: {insight['check']}")
+
+        st.markdown("### Appliance clue engine")
+        st.write("These are cautious pattern matches. The app never knows exactly which appliance caused usage.")
+        st.dataframe(make_unique_columns(clues), hide_index=True, width="stretch")
+
+        st.markdown("### Irish household benchmarks")
+        st.write("Approximate ranges for quick orientation only. Home size, occupancy, heating type, EVs and work-from-home patterns can change what is normal.")
+        st.dataframe(make_unique_columns(benchmark_table(ctx, monthly, tariff)), hide_index=True, width="stretch")
+
+        st.markdown("### Ranked savings engine")
+        savings_display = recs.copy()
+        savings_display["Estimated annual saving"] = savings_display["Estimated annual saving"].map(lambda x: euro(x) if float(x) > 0 else "n/a")
+        st.dataframe(make_unique_columns(savings_display), hide_index=True, width="stretch")
+
+        st.markdown("### Supplier trust check")
+        if trust["has_app"]:
+            metric_card("Difference vs supplier app", f"{trust['percent_diff']:+.0f}%", f"Severity: {trust['severity']}")
+            st.write(trust["message"])
+            st.caption("This may indicate a supplier app sync/display issue. It does not prove billing is wrong; bills can include standing charges, PSO levy, VAT, credits and adjustments.")
+        else:
+            st.info(trust["message"])
+        with st.expander("Copy/paste supplier message"):
+            st.text_area("Supplier message", value=supplier_message(dataset, tariff, total_kwh, total_cost["total"], min_day, max_day), height=260, key="health_supplier_message")
+
+    with tabs[1]:
         st.markdown("### Bottom line")
         if tariff.get("supplier_app_kwh") is not None:
             app_kwh = float(tariff["supplier_app_kwh"])
@@ -1205,7 +1699,7 @@ def render_analytics_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedU
         with st.expander("Copy/paste supplier support message"):
             st.text_area("Supplier message", value=supplier_message(dataset, tariff, total_kwh, total_cost["total"], min_day, max_day), height=280)
 
-    with tabs[1]:
+    with tabs[2]:
         st.markdown("### Usage patterns")
         st.write("Use this tab to spot high days, quiet days, and whether your normal daily usage is drifting upward or downward.")
         c1, c2 = st.columns(2)
@@ -1245,7 +1739,7 @@ def render_analytics_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedU
         fig.update_layout(height=340, margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
-    with tabs[2]:
+    with tabs[3]:
         st.markdown("### Time-of-day analysis")
         st.write("This view turns 30-minute meter readings into clues about routine. It cannot identify exact appliances, but it shows when to investigate.")
         if interval_available and not hourly.empty:
@@ -1286,7 +1780,7 @@ def render_analytics_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedU
         else:
             st.info("Upload a 30-minute kWh or kW file to unlock hourly profiles, heatmaps, baseload estimates, and appliance-timing clues.")
 
-    with tabs[3]:
+    with tabs[4]:
         st.markdown("### Tariff and estimated cost analysis")
         st.write("This uses the tariff inputs in the sidebar. It is an estimate, because real bills can include prior balances, discounts, credits, VAT treatment, and corrections.")
 
@@ -1334,6 +1828,29 @@ def render_analytics_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedU
             metric_card("Usage charge", euro(total_cost["usage_charge"]), f"{tariff['unit_rate_cent']:.2f}c/kWh")
             metric_card("Fixed charges", euro(total_cost["standing_charge"] + total_cost["pso_levy"]), "Standing charge + PSO")
             metric_card("Export credit", euro(total_cost["export_credit"]), "Only when export data exists or is entered")
+
+        st.markdown("### Bill forecasting")
+        normal_month_kwh = ctx["recent_avg"] * 30.4
+        forecast_rows = []
+        for label, multiplier in [("Best case", 0.9), ("Normal recent pattern", 1.0), ("High-use month", 1.15)]:
+            forecast_cost = cost_for_period(normal_month_kwh * multiplier, 30, tariff, 0.0)
+            forecast_rows.append([label, normal_month_kwh * multiplier, forecast_cost["total"], forecast_cost["usage_charge"], forecast_cost["standing_charge"] + forecast_cost["pso_levy"]])
+        forecasts = pd.DataFrame(forecast_rows, columns=["Scenario", "Projected kWh", "Projected bill", "Usage charge", "Fixed charges"])
+        fcols = st.columns(3)
+        with fcols[0]:
+            metric_card("Current monthly estimate", euro(total_cost["total"] / max(period_days, 1) * 30.4), "Based on uploaded period")
+        with fcols[1]:
+            metric_card("Projected next bill", euro(ctx["projected_next_bill"]["total"]), f"Based on last {min(14, len(daily))} day(s)")
+        with fcols[2]:
+            metric_card("Estimated annual bill", euro(total_cost["annualised_cost"]), "At tariff inputs")
+        fig = px.bar(safe_plot_df(forecasts), x="Scenario", y="Projected bill", text=forecasts["Projected bill"].map(lambda x: f"€{x:.0f}"))
+        fig.update_layout(height=330, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="€")
+        st.plotly_chart(fig, use_container_width=True)
+        with st.expander("How bills are calculated"):
+            st.write(
+                "Estimated bills combine the unit rate multiplied by kWh, a daily pro-rata standing charge, a daily pro-rata PSO levy, and any export credit if export kWh is available. "
+                "Supplier bills may also include previous balances, VAT handling, discounts, credits, estimated reads, corrections or billing-period differences."
+            )
 
         st.markdown("### Tariff simulator")
         s1, s2 = st.columns(2)
@@ -1417,7 +1934,7 @@ def render_analytics_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedU
             width="stretch",
         )
 
-    with tabs[4]:
+    with tabs[5]:
         st.markdown("### Data quality")
         st.write("These checks tell you whether the upload is reliable enough for homeowner decisions, supplier conversations, and bill sense-checks.")
         q1, q2, q3, q4 = st.columns(4)
@@ -1480,15 +1997,16 @@ def render_analytics_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedU
 
 
 def render_upload_flow() -> tuple[dict | None, list[ParsedUpload]]:
-    st.markdown("## Start here")
+    st.markdown("## Start with your ESB CSV files")
+    st.write("Upload one or more ESB Networks HDF files. You do not need to know what each file means: the app detects the file types and uses whatever is available.")
     mode = st.radio("Choose data source", ["Upload ESB CSV files", "Try demo mode"], horizontal=True)
     parsed: list[ParsedUpload] = []
     if mode == "Try demo mode":
         return demo_dataset(), parsed
 
-    uploaded = st.file_uploader("Upload ESB Networks HDF CSV files", type=["csv"], accept_multiple_files=True)
+    uploaded = st.file_uploader("Upload ESB Networks HDF CSV files", type=["csv"], accept_multiple_files=True, help="You can upload interval kWh, interval kW, daily total, day/night/peak and export CSV files together.")
     if not uploaded:
-        st.info("Upload one or more ESB HDF CSV files to generate the dashboard. You can also switch to demo mode.")
+        st.info("Upload your ESB HDF CSV files to generate an energy health check. You can also switch to demo mode to see what the app does.")
         return None, parsed
     parsed = parse_uploads(uploaded)
     render_file_detection(parsed)
