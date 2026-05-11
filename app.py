@@ -796,19 +796,13 @@ def pill(label: str, level: str) -> str:
 
 
 def advisor_card(title: str, body: str, detail: str = "", level: str | None = None) -> None:
-    level_html = f"<div>{pill('Signal', level)}</div>" if level else ""
-    detail_html = f"<p class='muted'>{detail}</p>" if detail else ""
-    st.markdown(
-        f"""
-        <div class="advisor-card">
-            <h4>{title}</h4>
-            {level_html}
-            <p>{body}</p>
-            {detail_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    with st.container(border=True):
+        st.markdown(f"**{title}**")
+        if level:
+            st.caption(f"Confidence: {level}")
+        st.write(body)
+        if detail:
+            st.caption(detail)
 
 
 def classify_usage(annualised_kwh: float) -> str:
@@ -1573,18 +1567,35 @@ def render_analytics_dashboard(dataset: dict, tariff: dict, parsed: list[ParsedU
         with c1:
             st.markdown("#### Top things worth checking")
             checks = [
-                f"Overnight baseload: roughly {ctx['always_on_watts']:.0f} W" if pd.notna(ctx["always_on_watts"]) else "Upload interval data to estimate overnight baseload",
-                f"Highest-use day: {pd.Timestamp(ctx['peak_day']['usage_date']).strftime('%d %b')} at {ctx['peak_day']['usage_kwh']:.1f} kWh",
-                trust["message"] if trust["has_app"] else "Enter a supplier app usage figure if you want a trust check",
+                {
+                    "title": "Overnight baseload",
+                    "reason": f"Your always-on load is estimated at roughly {ctx['always_on_watts']:.0f} W." if pd.notna(ctx["always_on_watts"]) else "Upload interval data to estimate overnight baseload.",
+                    "confidence": "medium" if pd.notna(ctx["always_on_watts"]) else "low",
+                },
+                {
+                    "title": "Highest-use day",
+                    "reason": f"{pd.Timestamp(ctx['peak_day']['usage_date']).strftime('%d %b')} was your highest day at {ctx['peak_day']['usage_kwh']:.1f} kWh.",
+                    "confidence": "high",
+                },
+                {
+                    "title": "Supplier app trust check",
+                    "reason": trust["message"] if trust["has_app"] else "Enter a supplier app usage figure in the sidebar if you want a trust check.",
+                    "confidence": "medium" if trust["has_app"] else "low",
+                },
             ]
             for item in checks[:3]:
-                advisor_card("Check", item)
+                advisor_card(item["title"], item["reason"], level=item["confidence"])
         with c2:
             st.markdown("#### Top savings opportunities")
             display_recs = recs.head(3).copy()
             for _, row in display_recs.iterrows():
                 saving = euro(row["Estimated annual saving"]) if float(row["Estimated annual saving"]) > 0 else "Evidence / bill accuracy"
-                advisor_card(row["Recommendation"], row["Practical action"], f"Estimated annual saving: {saving}. Confidence: {row['Confidence']}.")
+                advisor_card(
+                    str(row["Recommendation"]),
+                    str(row["Why it was triggered"]),
+                    f"Action: {row['Practical action']} Estimated annual saving: {saving}.",
+                    level=str(row["Confidence"]),
+                )
 
         st.markdown("### Baseload intelligence")
         bcols = st.columns(5)
@@ -2016,6 +2027,7 @@ def render_upload_flow() -> tuple[dict | None, list[ParsedUpload]]:
         for message in dataset.get("messages", []):
             st.warning(str(message))
         return None, parsed
+    st.success("Your files are ready. Scroll down to view your dashboard.")
     return dataset, parsed
 
 
